@@ -1,0 +1,14 @@
+com\editor\command\ReplaceCommand.class
+com\editor\workspace\Workspace.class
+com\editor\observer\Observer.class
+com\editor\command\InsertCommand.class
+com\editor\logging\Logger.class
+com\editor\command\CommandParser.class
+com\editor\command\Command.class
+com\editor\App.class
+com\editor\command\AppendCommand.class
+com\editor\editor\TextEditor.class
+com\editor\command\DeleteCommand.class
+com\editor\observer\Event.class
+com\editor\memento\Memento.class
+com\editor\observer\Subject.class
