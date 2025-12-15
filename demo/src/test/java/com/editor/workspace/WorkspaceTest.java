@@ -1,5 +1,6 @@
 package com.editor.workspace;
 
+import com.editor.editor.Editor;
 import com.editor.editor.TextEditor;
 import org.junit.Before;
 import org.junit.Test;
@@ -26,25 +27,31 @@ public class WorkspaceTest {
     @Test
     public void testLoadFile() throws IOException {
         workspace.loadFile(testFile.toString());
-        TextEditor editor = workspace.getEditor(testFile.toString());
+        Editor editor = workspace.getEditor(testFile.toString());
         assertNotNull(editor);
-        assertEquals(2, editor.getLines().size());
+        assertTrue(editor instanceof TextEditor);
+        TextEditor textEditor = (TextEditor) editor;
+        assertEquals(2, textEditor.getLines().size());
     }
 
     @Test
     public void testInitFile() {
         String filePath = "newfile.txt";
         workspace.initFile(filePath, false);
-        TextEditor editor = workspace.getEditor(filePath);
+        Editor editor = workspace.getEditor(filePath);
         assertNotNull(editor);
+        assertTrue(editor instanceof TextEditor);
         assertTrue(workspace.isModified(filePath));
     }
 
     @Test
     public void testSaveFile() throws IOException {
         workspace.loadFile(testFile.toString());
-        TextEditor editor = workspace.getEditor(testFile.toString());
-        editor.append("Line 3");
+        Editor editor = workspace.getEditor(testFile.toString());
+        assertNotNull(editor);
+        assertTrue(editor instanceof TextEditor);
+        TextEditor textEditor = (TextEditor) editor;
+        textEditor.append("Line 3");
         workspace.saveFile(testFile.toString());
         assertFalse(workspace.isModified(testFile.toString()));
     }
@@ -53,7 +60,8 @@ public class WorkspaceTest {
     public void testCloseFile() throws IOException {
         workspace.loadFile(testFile.toString());
         workspace.closeFile(testFile.toString());
-        assertNull(workspace.getEditor(testFile.toString()));
+        Editor editor = workspace.getEditor(testFile.toString());
+        assertNull(editor);
     }
 
     @Test

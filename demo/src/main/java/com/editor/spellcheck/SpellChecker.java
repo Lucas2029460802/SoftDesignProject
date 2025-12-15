@@ -21,3 +21,4 @@ public interface SpellChecker {
     String getSuggestion(String word);
 }
 
+
