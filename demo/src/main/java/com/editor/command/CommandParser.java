@@ -1,7 +1,13 @@
 package com.editor.command;
 
+import com.editor.editor.Editor;
 import com.editor.editor.TextEditor;
+import com.editor.editor.XmlEditor;
+import com.editor.editor.XmlElement;
 import com.editor.logging.Logger;
+import com.editor.spellcheck.SpellChecker;
+import com.editor.spellcheck.SpellError;
+import com.editor.spellcheck.SimpleSpellChecker;
 import com.editor.workspace.Workspace;
 
 import java.io.File;
@@ -10,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 命令解析器
@@ -17,10 +24,12 @@ import java.util.List;
 public class CommandParser {
     private final Workspace workspace;
     private final Logger logger;
+    private final SpellChecker spellChecker;
 
     public CommandParser(Workspace workspace, Logger logger) {
         this.workspace = workspace;
         this.logger = logger;
+        this.spellChecker = new SimpleSpellChecker(); // 使用适配器模式
         // 将logger注册为workspace的观察者
         workspace.attach(logger);
     }
@@ -75,6 +84,20 @@ public class CommandParser {
                     return executeLogOff(args);
                 case "log-show":
                     return executeLogShow(args);
+                case "insert-before":
+                    return executeInsertBefore(args);
+                case "append-child":
+                    return executeAppendChild(args);
+                case "edit-id":
+                    return executeEditId(args);
+                case "edit-text":
+                    return executeEditText(args);
+                case "delete-element":
+                    return executeDeleteElement(args);
+                case "xml-tree":
+                    return executeXmlTree(args);
+                case "spell-check":
+                    return executeSpellCheck(args);
                 default:
                     return "未知命令: " + command;
             }
@@ -89,7 +112,7 @@ public class CommandParser {
         }
         String filePath = args.trim();
         workspace.loadFile(filePath);
-        TextEditor editor = workspace.getEditor(filePath);
+        Editor editor = workspace.getEditor(filePath);
         if (editor != null && workspace.getLogStatus(filePath)) {
             logger.enableLog(filePath);
             editor.attach(logger);
@@ -101,7 +124,7 @@ public class CommandParser {
     private String executeSave(String args) throws IOException {
         if (args.isEmpty()) {
             // 保存当前活动文件
-            TextEditor editor = workspace.getActiveEditor();
+            Editor editor = workspace.getActiveEditor();
             if (editor == null) {
                 return "错误: 没有活动文件";
             }
@@ -128,7 +151,7 @@ public class CommandParser {
         String filePath = parts[0];
         boolean withLog = parts.length > 1 && "with-log".equals(parts[1]);
         workspace.initFile(filePath, withLog);
-        TextEditor editor = workspace.getEditor(filePath);
+        Editor editor = workspace.getEditor(filePath);
         if (editor != null) {
             if (withLog || workspace.getLogStatus(filePath)) {
                 logger.enableLog(filePath);
@@ -142,7 +165,7 @@ public class CommandParser {
     private String executeClose(String args) {
         String filePath;
         if (args.isEmpty()) {
-            TextEditor editor = workspace.getActiveEditor();
+            Editor editor = workspace.getActiveEditor();
             if (editor == null) {
                 return "错误: 没有活动文件";
             }
@@ -176,7 +199,9 @@ public class CommandParser {
         for (String file : files) {
             String status = workspace.isModified(file) ? "*" : " ";
             String active = file.equals(activeFile) ? ">" : " ";
-            sb.append(active).append(status).append(" ").append(file).append("\n");
+            String editTime = workspace.getStatistics().getFormattedEditTime(file);
+            sb.append(active).append(status).append(" ").append(file)
+              .append(" (").append(editTime).append(")").append("\n");
         }
         return sb.toString();
     }
@@ -212,7 +237,7 @@ public class CommandParser {
     }
 
     private String executeUndo() {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
@@ -224,7 +249,7 @@ public class CommandParser {
     }
 
     private String executeRedo() {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
@@ -242,12 +267,16 @@ public class CommandParser {
     }
 
     private String executeAppend(String args) {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
+        if (!editor.isTextEditor()) {
+            return "错误: append命令只能用于文本文件";
+        }
+        TextEditor textEditor = (TextEditor) editor;
         String text = parseQuotedText(args);
-        AppendCommand cmd = new AppendCommand(editor, text);
+        AppendCommand cmd = new AppendCommand(textEditor, text);
         editor.executeCommand(cmd);
         workspace.setModified(editor.getFilePath(), true);
         logger.logCommand(editor.getFilePath(), "append \"" + text + "\"");
@@ -255,15 +284,19 @@ public class CommandParser {
     }
 
     private String executeInsert(String args) {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
+        if (!editor.isTextEditor()) {
+            return "错误: insert命令只能用于文本文件";
+        }
+        TextEditor textEditor = (TextEditor) editor;
         String[] parts = parseInsertArgs(args);
         int line = Integer.parseInt(parts[0]);
         int col = Integer.parseInt(parts[1]);
         String text = parts[2];
-        InsertCommand cmd = new InsertCommand(editor, line, col, text);
+        InsertCommand cmd = new InsertCommand(textEditor, line, col, text);
         editor.executeCommand(cmd);
         workspace.setModified(editor.getFilePath(), true);
         logger.logCommand(editor.getFilePath(), 
@@ -272,10 +305,14 @@ public class CommandParser {
     }
 
     private String executeDelete(String args) {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
+        if (!editor.isTextEditor()) {
+            return "错误: delete命令只能用于文本文件";
+        }
+        TextEditor textEditor = (TextEditor) editor;
         String[] parts = args.trim().split("\\s+");
         if (parts.length < 2) {
             return "错误: delete命令需要行号:列号和长度";
@@ -284,7 +321,7 @@ public class CommandParser {
         int line = Integer.parseInt(pos[0]);
         int col = Integer.parseInt(pos[1]);
         int len = Integer.parseInt(parts[1]);
-        DeleteCommand cmd = new DeleteCommand(editor, line, col, len);
+        DeleteCommand cmd = new DeleteCommand(textEditor, line, col, len);
         editor.executeCommand(cmd);
         workspace.setModified(editor.getFilePath(), true);
         logger.logCommand(editor.getFilePath(), 
@@ -293,16 +330,20 @@ public class CommandParser {
     }
 
     private String executeReplace(String args) {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
+        if (!editor.isTextEditor()) {
+            return "错误: replace命令只能用于文本文件";
+        }
+        TextEditor textEditor = (TextEditor) editor;
         String[] parts = parseReplaceArgs(args);
         int line = Integer.parseInt(parts[0]);
         int col = Integer.parseInt(parts[1]);
         int len = Integer.parseInt(parts[2]);
         String text = parts[3];
-        ReplaceCommand cmd = new ReplaceCommand(editor, line, col, len, text);
+        ReplaceCommand cmd = new ReplaceCommand(textEditor, line, col, len, text);
         editor.executeCommand(cmd);
         workspace.setModified(editor.getFilePath(), true);
         logger.logCommand(editor.getFilePath(), 
@@ -311,18 +352,22 @@ public class CommandParser {
     }
 
     private String executeShow(String args) {
-        TextEditor editor = workspace.getActiveEditor();
+        Editor editor = workspace.getActiveEditor();
         if (editor == null) {
             return "错误: 没有活动文件";
         }
+        if (!editor.isTextEditor()) {
+            return "错误: show命令只能用于文本文件";
+        }
+        TextEditor textEditor = (TextEditor) editor;
         if (args.isEmpty()) {
-            return editor.show(1, -1);
+            return textEditor.show(1, -1);
         }
         String[] range = args.split(":");
         if (range.length == 2) {
             int start = Integer.parseInt(range[0]);
             int end = Integer.parseInt(range[1]);
-            return editor.show(start, end);
+            return textEditor.show(start, end);
         }
         return "错误: show命令参数格式错误";
     }
@@ -330,7 +375,7 @@ public class CommandParser {
     private String executeLogOn(String args) {
         String filePath;
         if (args.isEmpty()) {
-            TextEditor editor = workspace.getActiveEditor();
+            Editor editor = workspace.getActiveEditor();
             if (editor == null) {
                 return "错误: 没有活动文件";
             }
@@ -340,7 +385,7 @@ public class CommandParser {
         }
         logger.enableLog(filePath);
         workspace.setLogStatus(filePath, true);
-        TextEditor editor = workspace.getEditor(filePath);
+        Editor editor = workspace.getEditor(filePath);
         if (editor != null) {
             editor.attach(logger);
         }
@@ -351,7 +396,7 @@ public class CommandParser {
     private String executeLogOff(String args) {
         String filePath;
         if (args.isEmpty()) {
-            TextEditor editor = workspace.getActiveEditor();
+            Editor editor = workspace.getActiveEditor();
             if (editor == null) {
                 return "错误: 没有活动文件";
             }
@@ -361,7 +406,7 @@ public class CommandParser {
         }
         logger.disableLog(filePath);
         workspace.setLogStatus(filePath, false);
-        TextEditor editor = workspace.getEditor(filePath);
+        Editor editor = workspace.getEditor(filePath);
         if (editor != null) {
             editor.detach(logger);
         }
@@ -372,7 +417,7 @@ public class CommandParser {
     private String executeLogShow(String args) {
         String filePath;
         if (args.isEmpty()) {
-            TextEditor editor = workspace.getActiveEditor();
+            Editor editor = workspace.getActiveEditor();
             if (editor == null) {
                 return "错误: 没有活动文件";
             }
@@ -413,6 +458,357 @@ public class CommandParser {
         int len = Integer.parseInt(parts[1]);
         String text = parts.length > 2 ? parseQuotedText(parts[2]) : "";
         return new String[]{pos[0], pos[1], String.valueOf(len), text};
+    }
+
+    // ========== XML编辑命令 ==========
+
+    private String executeInsertBefore(String args) {
+        Editor editor = workspace.getActiveEditor();
+        if (editor == null) {
+            return "错误: 没有活动文件";
+        }
+        if (!editor.isXmlEditor()) {
+            return "错误: insert-before命令只能用于XML文件";
+        }
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        
+        String[] parts = args.trim().split("\\s+", 3);
+        if (parts.length < 3) {
+            return "错误: insert-before命令格式: insert-before <ref-id> <tag> <id> [属性...]";
+        }
+        
+        String refId = parts[0];
+        String tag = parts[1];
+        String newId = parts[2];
+        
+        XmlElement refElement = xmlEditor.getElementById(refId);
+        if (refElement == null) {
+            return "错误: 未找到ID为 " + refId + " 的元素";
+        }
+        
+        XmlElement parent = refElement.getParent();
+        if (parent == null) {
+            return "错误: 根元素不能作为参考元素";
+        }
+        
+        XmlElement newElement = new XmlElement(tag, newId);
+        
+        // 解析属性（如果有）
+        if (parts.length > 3) {
+            String attrsStr = parts[3];
+            // 简单解析属性 key="value" 格式
+            java.util.regex.Pattern attrPattern = java.util.regex.Pattern.compile("(\\w+)=\"([^\"]+)\"");
+            java.util.regex.Matcher matcher = attrPattern.matcher(attrsStr);
+            while (matcher.find()) {
+                newElement.setAttribute(matcher.group(1), matcher.group(2));
+            }
+        }
+        
+        try {
+            XmlInsertBeforeCommand cmd = new XmlInsertBeforeCommand(xmlEditor, newElement, refElement);
+            xmlEditor.executeCommand(cmd);
+            workspace.setModified(editor.getFilePath(), true);
+            logger.logCommand(editor.getFilePath(), "insert-before " + args);
+            return "元素已插入";
+        } catch (IllegalArgumentException e) {
+            return "错误: " + e.getMessage();
+        }
+    }
+
+    private String executeAppendChild(String args) {
+        Editor editor = workspace.getActiveEditor();
+        if (editor == null) {
+            return "错误: 没有活动文件";
+        }
+        if (!editor.isXmlEditor()) {
+            return "错误: append-child命令只能用于XML文件";
+        }
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        
+        String[] parts = args.trim().split("\\s+", 3);
+        if (parts.length < 3) {
+            return "错误: append-child命令格式: append-child <parent-id> <tag> <id> [属性...]";
+        }
+        
+        String parentId = parts[0];
+        String tag = parts[1];
+        String newId = parts[2];
+        
+        XmlElement parent = xmlEditor.getElementById(parentId);
+        if (parent == null) {
+            return "错误: 未找到ID为 " + parentId + " 的元素";
+        }
+        
+        XmlElement newElement = new XmlElement(tag, newId);
+        
+        // 解析属性（如果有）
+        if (parts.length > 3) {
+            String attrsStr = parts[3];
+            java.util.regex.Pattern attrPattern = java.util.regex.Pattern.compile("(\\w+)=\"([^\"]+)\"");
+            java.util.regex.Matcher matcher = attrPattern.matcher(attrsStr);
+            while (matcher.find()) {
+                newElement.setAttribute(matcher.group(1), matcher.group(2));
+            }
+        }
+        
+        try {
+            XmlAppendChildCommand cmd = new XmlAppendChildCommand(xmlEditor, newElement, parent);
+            xmlEditor.executeCommand(cmd);
+            workspace.setModified(editor.getFilePath(), true);
+            logger.logCommand(editor.getFilePath(), "append-child " + args);
+            return "子元素已追加";
+        } catch (IllegalArgumentException e) {
+            return "错误: " + e.getMessage();
+        }
+    }
+
+    private String executeEditId(String args) {
+        Editor editor = workspace.getActiveEditor();
+        if (editor == null) {
+            return "错误: 没有活动文件";
+        }
+        if (!editor.isXmlEditor()) {
+            return "错误: edit-id命令只能用于XML文件";
+        }
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        
+        String[] parts = args.trim().split("\\s+");
+        if (parts.length < 2) {
+            return "错误: edit-id命令格式: edit-id <old-id> <new-id>";
+        }
+        
+        String oldId = parts[0];
+        String newId = parts[1];
+        
+        XmlElement element = xmlEditor.getElementById(oldId);
+        if (element == null) {
+            return "错误: 未找到ID为 " + oldId + " 的元素";
+        }
+        
+        if (xmlEditor.getElementById(newId) != null && !newId.equals(oldId)) {
+            return "错误: ID " + newId + " 已存在";
+        }
+        
+        XmlEditIdCommand cmd = new XmlEditIdCommand(xmlEditor, element, newId);
+        xmlEditor.executeCommand(cmd);
+        workspace.setModified(editor.getFilePath(), true);
+        logger.logCommand(editor.getFilePath(), "edit-id " + args);
+        return "元素ID已修改";
+    }
+
+    private String executeEditText(String args) {
+        Editor editor = workspace.getActiveEditor();
+        if (editor == null) {
+            return "错误: 没有活动文件";
+        }
+        if (!editor.isXmlEditor()) {
+            return "错误: edit-text命令只能用于XML文件";
+        }
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        
+        String[] parts = args.trim().split("\\s+", 2);
+        if (parts.length < 2) {
+            return "错误: edit-text命令格式: edit-text <id> \"text\"";
+        }
+        
+        String id = parts[0];
+        String text = parseQuotedText(parts[1]);
+        
+        XmlElement element = xmlEditor.getElementById(id);
+        if (element == null) {
+            return "错误: 未找到ID为 " + id + " 的元素";
+        }
+        
+        try {
+            XmlEditTextCommand cmd = new XmlEditTextCommand(xmlEditor, element, text);
+            xmlEditor.executeCommand(cmd);
+            workspace.setModified(editor.getFilePath(), true);
+            logger.logCommand(editor.getFilePath(), "edit-text " + args);
+            return "元素文本已修改";
+        } catch (IllegalArgumentException e) {
+            return "错误: " + e.getMessage();
+        }
+    }
+
+    private String executeDeleteElement(String args) {
+        Editor editor = workspace.getActiveEditor();
+        if (editor == null) {
+            return "错误: 没有活动文件";
+        }
+        if (!editor.isXmlEditor()) {
+            return "错误: delete-element命令只能用于XML文件";
+        }
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        
+        String id = args.trim();
+        if (id.isEmpty()) {
+            return "错误: delete-element命令需要元素ID";
+        }
+        
+        XmlElement element = xmlEditor.getElementById(id);
+        if (element == null) {
+            return "错误: 未找到ID为 " + id + " 的元素";
+        }
+        
+        XmlElement parent = element.getParent();
+        if (parent == null) {
+            return "错误: 不能删除根元素";
+        }
+        
+        XmlDeleteElementCommand cmd = new XmlDeleteElementCommand(xmlEditor, element);
+        xmlEditor.executeCommand(cmd);
+        workspace.setModified(editor.getFilePath(), true);
+        logger.logCommand(editor.getFilePath(), "delete-element " + id);
+        return "元素已删除";
+    }
+
+    private String executeXmlTree(String args) {
+        Editor editor;
+        if (args.isEmpty()) {
+            editor = workspace.getActiveEditor();
+            if (editor == null) {
+                return "错误: 没有活动文件";
+            }
+        } else {
+            editor = workspace.getEditor(args.trim());
+            if (editor == null) {
+                return "错误: 文件未打开: " + args.trim();
+            }
+        }
+        
+        if (!editor.isXmlEditor()) {
+            return "错误: xml-tree命令只能用于XML文件";
+        }
+        
+        XmlEditor xmlEditor = (XmlEditor) editor;
+        XmlElement root = xmlEditor.getRoot();
+        if (root == null) {
+            return "XML文件为空";
+        }
+        
+        return buildXmlTreeString(root, "", true);
+    }
+
+    private String buildXmlTreeString(XmlElement element, String prefix, boolean isLast) {
+        StringBuilder sb = new StringBuilder();
+        
+        // 构建元素信息
+        sb.append(prefix);
+        if (!prefix.isEmpty()) {
+            sb.append(isLast ? "└── " : "├── ");
+        }
+        
+        sb.append(element.getTagName());
+        sb.append(" [");
+        java.util.Map<String, String> attrs = element.getAttributes();
+        boolean first = true;
+        for (java.util.Map.Entry<String, String> entry : attrs.entrySet()) {
+            if (!first) {
+                sb.append(", ");
+            }
+            sb.append(entry.getKey()).append("=\"").append(entry.getValue()).append("\"");
+            first = false;
+        }
+        sb.append("]");
+        
+        if (element.hasTextContent()) {
+            sb.append("\n").append(prefix);
+            if (!prefix.isEmpty()) {
+                sb.append(isLast ? "    " : "│   ");
+            }
+            sb.append("└── \"").append(element.getTextContent()).append("\"");
+        }
+        
+        sb.append("\n");
+        
+        // 处理子元素
+        List<XmlElement> children = element.getChildren();
+        for (int i = 0; i < children.size(); i++) {
+            boolean last = (i == children.size() - 1);
+            String newPrefix = prefix + (isLast ? "    " : "│   ");
+            sb.append(buildXmlTreeString(children.get(i), newPrefix, last));
+        }
+        
+        return sb.toString();
+    }
+
+    private String executeSpellCheck(String args) {
+        Editor editor;
+        if (args.isEmpty()) {
+            editor = workspace.getActiveEditor();
+            if (editor == null) {
+                return "错误: 没有活动文件";
+            }
+        } else {
+            editor = workspace.getEditor(args.trim());
+            if (editor == null) {
+                return "错误: 文件未打开: " + args.trim();
+            }
+        }
+        
+        StringBuilder result = new StringBuilder();
+        result.append("拼写检查结果:\n");
+        
+        if (editor.isTextEditor()) {
+            // 文本文件拼写检查
+            TextEditor textEditor = (TextEditor) editor;
+            List<String> lines = textEditor.getLines();
+            StringBuilder text = new StringBuilder();
+            for (String line : lines) {
+                text.append(line).append("\n");
+            }
+            
+            List<SpellError> errors = spellChecker.checkSpelling(text.toString());
+            if (errors.isEmpty()) {
+                result.append("未发现拼写错误");
+            } else {
+                for (SpellError error : errors) {
+                    result.append("第").append(error.getLine())
+                          .append("行，第").append(error.getColumn())
+                          .append("列: \"").append(error.getWord())
+                          .append("\" -> 建议: ").append(error.getSuggestion()).append("\n");
+                }
+            }
+        } else if (editor.isXmlEditor()) {
+            // XML文件拼写检查（只检查元素文本内容）
+            XmlEditor xmlEditor = (XmlEditor) editor;
+            List<com.editor.spellcheck.XmlSpellError> xmlErrors = new java.util.ArrayList<>();
+            collectXmlTextErrors(xmlEditor.getRoot(), xmlErrors);
+            
+            if (xmlErrors.isEmpty()) {
+                result.append("未发现拼写错误");
+            } else {
+                for (com.editor.spellcheck.XmlSpellError error : xmlErrors) {
+                    result.append("元素 ").append(error.getElementId())
+                          .append(": \"").append(error.getWord())
+                          .append("\" -> 建议: ").append(error.getSuggestion()).append("\n");
+                }
+            }
+        }
+        
+        return result.toString();
+    }
+
+    private void collectXmlTextErrors(XmlElement element, List<com.editor.spellcheck.XmlSpellError> errors) {
+        if (element == null) {
+            return;
+        }
+        
+        if (element.hasTextContent()) {
+            String text = element.getTextContent();
+            List<SpellError> textErrors = spellChecker.checkSpelling(text);
+            for (SpellError error : textErrors) {
+                errors.add(new com.editor.spellcheck.XmlSpellError(
+                    element.getId(), 
+                    error.getWord(), 
+                    error.getSuggestion()
+                ));
+            }
+        }
+        
+        for (XmlElement child : element.getChildren()) {
+            collectXmlTextErrors(child, errors);
+        }
     }
 }
 

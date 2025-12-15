@@ -11,7 +11,7 @@ import java.util.Stack;
 /**
  * 文本编辑器类
  */
-public class TextEditor implements Subject {
+public class TextEditor implements Editor {
     private final String filePath;
     private List<String> lines;
     private boolean modified;
@@ -207,6 +207,13 @@ public class TextEditor implements Subject {
 
     public boolean canRedo() {
         return !redoStack.isEmpty();
+    }
+
+    @Override
+    public void save() throws java.io.IOException {
+        java.nio.file.Path path = java.nio.file.Paths.get(filePath);
+        java.nio.file.Files.write(path, lines, java.nio.charset.StandardCharsets.UTF_8);
+        modified = false;
     }
 
     @Override

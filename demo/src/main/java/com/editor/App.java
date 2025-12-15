@@ -31,6 +31,8 @@ public class App {
                 String result = parser.execute(input.trim());
                 
                 if ("exit".equals(result)) {
+                    // 停止统计计时
+                    workspace.getStatistics().stopAll();
                     break;
                 }
                 
