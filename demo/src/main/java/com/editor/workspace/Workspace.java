@@ -77,7 +77,10 @@ public class Workspace implements Subject {
         editors.put(filePath, editor);
         modifiedStatus.put(filePath, false);
         
-        // 更新统计信息
+        // 重新打开文件时，按照实验要求重置本会话内的编辑时长
+        statistics.resetEditTime(filePath);
+
+        // 更新统计信息（开始计时）
         String oldActiveFile = activeFile;
         activeFile = filePath;
         statistics.onFileActivated(filePath);

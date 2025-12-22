@@ -1,0 +1,5 @@
+com\editor\workspace\WorkspaceTest.class
+com\editor\command\CommandParserTest.class
+com\editor\AppTest.class
+com\editor\editor\TextEditorTest.class
+com\editor\logging\LoggerTest.class
